@@ -115,12 +115,12 @@ export function createLanguageModel(env: Record<string, string | undefined>): Ty
  * @param org The OpenAI organization id.
  * @returns An instance of `TypeChatLanguageModel`.
  */
-export function createOpenAILanguageModel(apiKey: string, model: string, endPoint = "https://api.openai.com/v1/chat/completions", org = ""): TypeChatLanguageModel {
+export function createOpenAILanguageModel(apiKey: string, model: string, endPoint = "https://api.openai.com/v1/chat/completions", org = "", defaultParams={}): TypeChatLanguageModel {
     const headers = {
         "Authorization": `Bearer ${apiKey}`,
         "OpenAI-Organization": org
     };
-    return createFetchLanguageModel(endPoint, headers, { model });
+    return createFetchLanguageModel(endPoint, headers, { ...defaultParams, model });
 }
 
 /**
@@ -159,9 +159,9 @@ function createFetchLanguageModel(url: string, headers: object, defaultParams: o
             const options = {
                 method: "POST",
                 body: JSON.stringify({
+                    temperature: 0,
                     ...defaultParams,
                     messages,
-                    temperature: 0,
                     n: 1
                 }),
                 headers: {

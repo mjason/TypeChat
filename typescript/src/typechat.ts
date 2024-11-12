@@ -142,7 +142,15 @@ export function createJsonTranslator<T extends object>(model: TypeChatLanguageMo
                 jsonObject = JSON.parse(jsonText) as object;
             }
             catch (e) {
-                return error(e instanceof SyntaxError ? e.message : "JSON parse error");
+                console.log(e instanceof SyntaxError ? e.message : "JSON parse error");
+                try {
+                    console.log("trying to repair json");
+                    const { jsonrepair } = await import('jsonrepair');
+                    jsonObject = JSON.parse(jsonrepair(jsonText)) as object;
+                } catch (e) {
+                    console.log("trying to repair json failed");
+                    return error(e instanceof SyntaxError ? e.message : "JSON parse error");
+                }
             }
             if (typeChat.stripNulls) {
                 stripNulls(jsonObject);
