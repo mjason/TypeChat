@@ -171,6 +171,101 @@ export function createJsonTranslator<T extends object>(model: TypeChatLanguageMo
 }
 
 /**
+ * Creates an object that can translate natural language requests into JSON objects of the given type.
+ * The specified type argument `T` must be the same type as `typeName` in the given `schema`. The function
+ * creates a `TypeChatJsonValidator<T>` and stores it in the `validator` property of the returned instance.
+ * @param model The language model to use for translating requests into JSON.
+ * @param validator A string containing the TypeScript source code for the JSON schema.
+ * @param typeName The name of the JSON target type in the schema.
+ * @returns A `TypeChatJsonTranslator<T>` instance.
+ */
+export function createLisaTranslator<T extends object>(
+    model: TypeChatLanguageModel, 
+    validator: TypeChatJsonValidator<T>,
+    repairModel: TypeChatLanguageModel
+): TypeChatJsonTranslator<T> {
+    const typeChat: TypeChatJsonTranslator<T> = {
+        model,
+        validator,
+        attemptRepair: true,
+        stripNulls: false,
+        createRequestPrompt,
+        createRepairPrompt,
+        validateInstance: success,
+        translate
+    };
+    return typeChat;
+
+    function createRequestPrompt(request: string) {
+        return `You are a service that translates user requests into JSON objects of type "${validator.getTypeName()}" according to the following TypeScript definitions:\n` +
+            `\`\`\`\n${validator.getSchemaText()}\`\`\`\n` +
+            `The following is a user request:\n` +
+            `"""\n${request}\n"""\n` +
+            `The following is the user request translated into a JSON object with 2 spaces of indentation and no properties with the value undefined:\n`;
+    }
+
+    function createRepairPrompt(validationError: string) {
+        return `The JSON object is invalid for the following reason:\n` +
+            `"""\n${validationError}\n"""\n` +
+            `The following is a revised JSON object:\n`;
+    }
+
+    async function translate(request: string, promptPreamble?: string | PromptSection[]) {
+        const preamble: PromptSection[] = typeof promptPreamble === "string" ? [{ role: "user", content: promptPreamble }] : promptPreamble ?? [];
+        let prompt: PromptSection[] = [...preamble, { role: "user", content: typeChat.createRequestPrompt(request) }];
+        let attemptRepair = typeChat.attemptRepair;
+        while (true) {
+            let response;
+            if (attemptRepair) {
+                response = await model.complete(prompt);
+            } else {
+                response = await repairModel.complete(prompt);
+            }
+            if (!response.success) {
+                return response;
+            }
+            const responseText = response.data;
+            const startIndex = responseText.indexOf("{");
+            const endIndex = responseText.lastIndexOf("}");
+            if (!(startIndex >= 0 && endIndex > startIndex)) {
+                return error(`Response is not JSON:\n${responseText}`);
+            }
+            const jsonText = responseText.slice(startIndex, endIndex + 1);
+            let jsonObject;
+            try {
+                jsonObject = JSON.parse(jsonText) as object;
+            }
+            catch (e) {
+                console.log(e instanceof SyntaxError ? e.message : "JSON parse error");
+                try {
+                    console.log("trying to repair json");
+                    const { jsonrepair } = await import('jsonrepair');
+                    jsonObject = JSON.parse(jsonrepair(jsonText)) as object;
+                } catch (e) {
+                    console.log("trying to repair json failed");
+                    return error(e instanceof SyntaxError ? e.message : "JSON parse error");
+                }
+            }
+            if (typeChat.stripNulls) {
+                stripNulls(jsonObject);
+            }
+            const schemaValidation = validator.validate(jsonObject);
+            const validation = schemaValidation.success ? typeChat.validateInstance(schemaValidation.data) : schemaValidation;
+            if (validation.success) {
+                return validation;
+            }
+            if (!attemptRepair) {
+                return error(`JSON validation failed: ${validation.message}\n${jsonText}`);
+            }
+            prompt.push({ role: "assistant", content: responseText });
+            prompt.push({ role: "user", content: typeChat.createRepairPrompt(validation.message) });
+            attemptRepair = false;
+        }
+    }
+}
+
+
+/**
  * Recursively delete properties with null values from the given object. This function assumes there are no
  * circular references in the object.
  * @param obj The object in which to strip null valued properties.
